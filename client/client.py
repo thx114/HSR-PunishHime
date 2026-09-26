@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-client.py - PunishHime（惩罚姬）· 崩铁独立客户端
+client.py - HSR PunishHime（惩罚姬）· 崩铁独立客户端
 
 单进程四件套：
   1. V4Bridge   —— 自研 V4 控制器（v4ctrl）线程化门面，DG-LAB 4 APP 扫码接入

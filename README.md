@@ -1,10 +1,10 @@
-# PunishHime（惩罚姬）
+# HSR PunishHime（惩罚姬）
 
 **Take damage, get zapped.** — A DG-Lab Coyote E-stim punishment companion for *Honkai: Star Rail*.
 
 崩坏：星穹铁道「挨打就电」惩罚客户端。程序盯着你的血条，你被打一下，郊狼（DG-Lab Coyote）就电你一下——强度、波形、叠加、持续电全部可调。
 
-> **PunishHime** = Punish + 姬（Hime）。中文圈叫「惩罚姬」，英文就叫 PunishHime。
+> **HSR PunishHime** = HSR（崩坏：星穹铁道）+ Punish + 姬（Hime）。中文圈叫「惩罚姬」，英文叫 HSR PunishHime。
 
 ---
 
