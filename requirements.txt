@@ -1,0 +1,10 @@
+# Python 3.12 recommended
+aiohttp
+keyboard
+sounddevice
+numpy
+requests
+pillow
+pywebview
+qrcode
+cffi

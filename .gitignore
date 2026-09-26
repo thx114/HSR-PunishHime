@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.exe
+*.zip
+dist/
+temp/
+build/
+log/
+screenshots/
+*.log
+v4_pair.json
+v4_frames.log
+config.json.bak*
+config.json.before*
+config.json.recovered
