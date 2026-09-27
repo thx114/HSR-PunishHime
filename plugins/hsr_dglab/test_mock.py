@@ -364,15 +364,16 @@ def main():
     assert "倒地" in (DOCK.logs()[-1][1] or ""), DOCK.logs()[-1]
     print(f"[PASS] 倒地重罚 -> {s}")
 
-    # 7. 战斗结束 -> clear -> 0；之后脱战掉血不触发
+    # 7. 战斗结束 -> clear -> 0；脱战掉血照常触发
+    # （仅战斗中惩罚选项已移除：veritas 只在战斗内读数据，脱战过滤无意义）
     VERITAS.emit("OnBattleEnd", {"total_damage": 123456})
     wait_for(lambda: DOCK.set_strengths() and DOCK.set_strengths()[-1] == ("All", 0),
              desc="战斗结束清零")
     n = len(DOCK.set_strengths())
     stat(1308, "CurrentHP", 2500)
     time.sleep(0.3)
-    assert len(DOCK.set_strengths()) == n, "脱战不应触发"
-    print("[PASS] 战斗结束清零 + 脱战过滤")
+    assert len(DOCK.set_strengths()) > n, "脱战掉血应照常触发"
+    print("[PASS] 战斗结束清零 + 脱战掉血照常触发")
 
     # 8. 实时状态接口（配置页面轮询的 get_status / str_up 动作）
     import start as start_mod
@@ -384,8 +385,12 @@ def main():
     by_name = {a["name"]: a for a in st["avatars"]}
     assert by_name["花火"]["hp"] == 2500 and by_name["花火"]["max_hp"] == 6000, by_name
     assert st["hit_count"] >= 3 and st["total_lost"] > 0
-    assert st["strength_a"] == 0, st  # 战斗结束已清零
+    # 仅战斗中惩罚已移除：脱战掉血照常触发，强度不再是 0
+    assert st["strength_a"] > 0, st
     assert st["last_hit"] and st["last_hit"]["name"] == "花火", st["last_hit"]
+    r = json.loads(start_mod.str_clear())
+    wait_for(lambda: DOCK.set_strengths() and DOCK.set_strengths()[-1] == ("All", 0),
+             desc="str_clear 先归零")
     r = json.loads(start_mod.str_up())
     wait_for(lambda: DOCK.set_strengths() and DOCK.set_strengths()[-1] == ("All", 1),
              desc="str_up 手动调节")
@@ -470,6 +475,7 @@ def main():
     # 12. 货币战争：扣血飘字（delta 模式）-> 触发 + 持续电击 -> 结束清波
     time.sleep(0.5)  # 确保叠加窗口过期
     n_wf = len(DOCK.waveforms())
+    n_clear = len(DOCK.clears())    # 触发前基准（新逻辑：发送前 clear 也计入）
     cw._on_ocr_delta(10, False)     # 识别到 -10
     wait_for(lambda: len(DOCK.waveforms()) > n_wf, desc="货币战争触发")
     s = DOCK.set_strengths()[-1]
@@ -490,7 +496,8 @@ def main():
     assert s2 == ("All", 25), f"局内伤加不应影响货币战争，实际 {s2}"
     TEST_CONFIG["plugins"]["damage_max_bonus"] = 10
     TEST_CONFIG["plugins"]["damage_mid_value"] = 3000
-    wait_for(lambda: len(DOCK.clears()) > 0, desc="持续电击结束清波")
+    wait_for(lambda: len(DOCK.clears()) > n_clear and not cw.engine.sustain_active(),
+             desc="持续电击结束清波")
     time.sleep(0.3)
     assert not cw.engine.sustain_active(), "持续电击应已结束"
     print(f"[PASS] 货币战争扣血电击 -> {s} + 不受局内伤加影响({s2}) + 持续电击后清波")
@@ -507,6 +514,7 @@ def main():
     #     当前血量 88 -> 系数 1.06 -> 25x1.06 = 26.5；叠加窗口已过，不计入 -> 26
     n_wf = len(DOCK.waveforms())
     n_set = len(DOCK.set_strengths())
+    n_clear2 = len(DOCK.clears())   # 触发前基准
     cw._on_pool_value(100)          # 基准
     cw._on_pool_value(88)           # -12
     wait_for(lambda: len(DOCK.waveforms()) > n_wf, desc="pool 差值触发")
@@ -517,7 +525,8 @@ def main():
     st = json.loads(start_mod.get_status())
     assert st["strength_a"] == 26 and st["strength_b"] == 26, st
     assert st["cw"]["hp_factor"] == 1.06, st["cw"]
-    wait_for(lambda: len(DOCK.clears()) > 1, desc="第二次持续电击清波")
+    wait_for(lambda: len(DOCK.clears()) > n_clear2 and not cw.engine.sustain_active(),
+             desc="第二次持续电击清波")
     print(f"[PASS] 总血量数值模式 -> {s_pool}（血量系数 1.06）+ 持续电击清波")
 
     # ================= 强度公式（ratio 模式） =================
@@ -545,6 +554,7 @@ def main():
     print("[PASS] 强度阈值 -> 刮痧跳过")
 
     # 17. 残血持续电：单角色残血 -> 持续电强度 12
+    n_clear3 = len(DOCK.clears())   # 残电前基准（前面测试的发送前 clear 已计入）
     TEST_CONFIG["plugins"]["low_sustain_enabled"] = True
     TEST_CONFIG["plugins"]["low_sustain_strength"] = 12
     TEST_CONFIG["plugins"]["low_sustain_step"] = 4
@@ -564,7 +574,7 @@ def main():
     stat(1308, "CurrentHP", 5400)
     stat(1003, "CurrentHP", 5500)
     wait_for(lambda: not core._low_sustain_active, timeout=8, desc="残血持续电结束")
-    wait_for(lambda: len(DOCK.clears()) > 2, timeout=4, desc="残电结束清波")
+    wait_for(lambda: len(DOCK.clears()) > n_clear3, timeout=4, desc="残电结束清波")
     TEST_CONFIG["plugins"]["low_sustain_enabled"] = False
     print("[PASS] 残血恢复 -> 持续电结束清波")
 

@@ -78,6 +78,9 @@ class HsrDGLab:
         # ---- 战斗状态 ----
         self.battle_active = False
         self.avatars = {}        # uid(int) -> name
+        self.lineup_uids = set() # 阵容角色 uid（OnSetBattleLineup）
+        self.mem_uids = set()    # 召唤物/忆灵 uid（阵容之外的 Player 实体）
+        self._hp_value_seen = {} # 血量撞值检测：value -> (uid, ts, old)
         self.hp = {}             # uid -> 当前血量
         self.max_hp = {}         # uid -> 最大血量
         self.shield = {}         # uid -> 当前护盾
@@ -359,9 +362,11 @@ class HsrDGLab:
         elif event == E.EVT_LINEUP:
             avatars = (payload or {}).get("avatars", [])
             self.avatars = {}
+            self.lineup_uids = set()
             for a in avatars:
                 try:
                     self.avatars[int(a.get("id"))] = str(a.get("name") or f"角色{a.get('id')}")
+                    self.lineup_uids.add(int(a.get("id")))
                 except (TypeError, ValueError):
                     continue
             self.hp.clear()
@@ -419,6 +424,10 @@ class HsrDGLab:
         if uid not in self.avatars:
             # veritas 中途接入 / OCR 路线未报阵容时动态注册
             self.avatars[uid] = str(payload.get("name") or f"角色{uid}")
+        # 阵容之外出现的 Player 实体 = 召唤物/忆灵（如遐蝶的死龙·玻吕刻斯），
+        # 掉血按 mem_drop_factor 折算，且不计残血持续电/倒地
+        if self.lineup_uids and uid not in self.lineup_uids:
+            self.mem_uids.add(uid)
 
         if payload.get("max_hp") is not None:
             self.max_hp[uid] = _to_float(payload["max_hp"], 0)
@@ -457,8 +466,26 @@ class HsrDGLab:
             return
 
         # 掉血 -> 进入聚合窗口（等价挨打就电的逐帧采样语义）
-        self.recent_hits.append((time.time(), uid))
-        self.aggregator.add(("hp", uid, src), old - value, time.time())
+        now = time.time()
+        # veritas 毛刺过滤：多个实体同一瞬间被读到完全相同的 HP 值
+        # （浮点精确相等，如死龙结算时四角色同时读成 1394.3885…），
+        # 真实战斗不可能出现，判定为读取毛刺：本 uid 维持旧值，
+        # 同时撤销先撞值那笔还挂在聚合窗口里的掉血并还原其血量
+        vkey = round(value, 6)
+        prev = self._hp_value_seen.get(vkey)
+        if prev is not None and prev[0] != uid and now - prev[1] <= 1.0:
+            puid, _pts, pold = prev
+            self._log("debug", "%s 血量读数 %.2f 与 %s 撞值，判定 veritas 毛刺忽略"
+                      % (self.avatars.get(uid, uid), value, puid))
+            self.hp[uid] = old
+            self.aggregator.discard(("hp", puid, src))
+            self.hp[puid] = pold
+            return
+        for k in [k for k, v in self._hp_value_seen.items() if now - v[1] > 1.0]:
+            self._hp_value_seen.pop(k, None)
+        self._hp_value_seen[vkey] = (uid, now, old)
+        self.recent_hits.append((now, uid))
+        self.aggregator.add(("hp", uid, src), old - value, now)
         self._touch_lowhp()
 
     # ================= 残血持续电 =================
@@ -470,6 +497,8 @@ class HsrDGLab:
             return 0
         n = 0
         for uid, hp in self.hp.items():
+            if uid in self.mem_uids or "忆灵" in str(self.avatars.get(uid, "")):
+                continue  # 忆灵/召唤物血量不计入残血持续电
             mx = self.max_hp.get(uid, 0)
             if mx > 0 and hp / mx * 100.0 < thr:
                 n += 1
@@ -514,7 +543,8 @@ class HsrDGLab:
                 self.set_strength("All", target)
                 self.current_strength_a = target
                 self.current_strength_b = target
-            self.send_pulse(self._get_pulse("hit_pulse"), "All")
+            # d 补满 2s 重发间隔：d 短了波形播完就断，持续电变"间歇电"
+            self.send_pulse(self._get_pulse("hit_pulse"), "All", duration_ms=2000)
             if self._lowhp_stop.wait(2.0):
                 break
         if not self._low_sustain_active:
@@ -649,7 +679,9 @@ class HsrDGLab:
                           "（远程调不动，插件只有急停归零可用）；"
                           "插件负责波形推送与脱战/暂停急停")
 
-    def send_pulse(self, pulse_data, channel="All"):
+    def send_pulse(self, pulse_data, channel="All", duration_ms=None):
+        """duration_ms：让 APP 把波形循环补满到该时长（持续电用，
+        普通掉电不传，按 wave_d_ms 配置走）"""
         if self._paused:
             self._log("debug", "暂停中，忽略波形输出")
             return
@@ -658,19 +690,27 @@ class HsrDGLab:
                 # 蓝牙：自定义波形经 /websocket 装入发送循环（自动播放 False，
                 # 播一轮即止）。绝不调用 start_punish——它的"自动播放循环"
                 # 用 stop_punish 停不掉（暂停语义），会导致持续输出。
-                resp = self.server.send_waveform(waveform=pulse_data,
-                                                 channel=channel)
+                kw = {"waveform": pulse_data, "channel": channel}
+                if duration_ms and hasattr(self.server, "bridge"):
+                    kw["total_duration"] = duration_ms / 1000.0
+                resp = self.server.send_waveform(**kw)
                 self._log("debug", f"蓝牙波形 {len(pulse_data)} 段 -> 发送循环")
                 if self._check_dock_error("蓝牙波形", resp):
                     return
                 if not self.sustain_active():
-                    # +0.3s：ver3 帧补齐拍（<=3 拍）+ 清理裕度，避免切掉尾巴
-                    dur = max(0.5, len(pulse_data) * 0.1 + 0.3)
-                    threading.Timer(dur, self._bt_auto_stop).start()
+                    # 序号守卫：连打时上一发的收尾定时器不得杀掉新波形
+                    gen = self.output_seq_bump()
+                    frames = max(1, -(-len(pulse_data) // 4))
+                    try:
+                        dur = frames * float(self._cfg("wave_d_ms", 100)) / 1000.0 + 0.15
+                    except Exception:
+                        dur = max(0.5, len(pulse_data) * 0.1)
+                    threading.Timer(dur, self._bt_auto_stop, args=(gen,)).start()
             else:
                 # App 中继：total_duration 必须匹配帧数（100ms/帧）；
-                # 默认 1s 会让 V4 消息里的 d 与帧数不符（30 帧=3s）
-                dur = round(len(pulse_data) * 0.1, 2)
+                # duration_ms 显式给出时以其为准（持续电补满间隔）
+                dur = round(duration_ms / 1000.0, 2) if duration_ms \
+                    else round(len(pulse_data) * 0.1, 2)
                 resp = self.server.send_waveform(waveform=pulse_data,
                                                  channel=channel,
                                                  total_duration=dur)
@@ -680,12 +720,21 @@ class HsrDGLab:
         except Exception as e:
             self._log("error", f"send_waveform 失败: {e}")
 
-    def _bt_auto_stop(self):
+    def output_seq_bump(self):
+        """每次输出递增序号；收尾定时器只有序号仍最新时才动手"""
+        self._output_seq = getattr(self, "_output_seq", 0) + 1
+        return self._output_seq
+
+    def _bt_auto_stop(self, gen=None):
         """蓝牙一次性电击结束：清波形 + 暂停播放 + 强度归零三重兜底。
 
         实测 server 的 stop_punish 是"暂停"语义停不掉自动播放，
-        强度归零是唯一物理可靠的输出切断手段。"""
+        强度归零是唯一物理可靠的输出切断手段。
+        gen 序号守卫：已有更新的输出（连打/测试电击）时本收尾作废，
+        否则会把新波形的强度归零、波形清掉，表现为"电卡起来了"。"""
         try:
+            if gen is not None and gen != getattr(self, "_output_seq", 0):
+                return
             if not self.sustain_active():
                 try:
                     self.server.clear_waveform()
@@ -802,8 +851,22 @@ class HsrDGLab:
                 self.set_strength("B", target_b)
                 self.current_strength_b = target_b
 
-        # 发送波形
+        # 发送波形：仅当上一条波形仍在播放时才先 clear（clear 到新波有
+        # 约 300ms 空窗，上一条已播完时再 clear 纯属白等）；在播时不清会
+        # 排队重复播放，所以在播必清。残血持续电播放中跳过 clear。
+        now_ts = time.time()
+        if (now < ov.base_until and ov._cfg("overlap_enabled", True)
+                and not self.sustain_active()
+                and now_ts < getattr(self, "_wave_until", 0.0)):
+            self.clear_waveform()
         self.send_pulse(pulse_data, "All")
+        # 记录本条波形的预计播完时刻（d = wave_d_ms × 帧数，帧=4串）
+        try:
+            frames = max(1, -(-len(pulse_data) // 4))
+            d_ms = int(float(self._cfg("wave_d_ms", 100))) * frames
+            self._wave_until = time.time() + d_ms / 1000.0
+        except Exception:
+            self._wave_until = time.time() + len(pulse_data) * 0.1
 
     # ================= 持续电击服务 =================
 

@@ -382,6 +382,10 @@ class HitAggregator:
                 del self._pending[key]
         return out
 
+    def discard(self, key):
+        """撤销某键的全部挂起（veritas 毛刺过滤用）"""
+        self._pending.pop(key, None)
+
     def flush_all(self):
         """立即冲刷全部挂起（战斗结束等场景）"""
         out = [(k, e["amount"]) for k, e in self._pending.items()]

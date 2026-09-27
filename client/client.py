@@ -132,6 +132,12 @@ def _ensure_external_config():
     if os.path.isfile(CONFIG_FILE):
         return
     src = os.path.join(PLUGIN_DIR, "config.json")
+    if not os.path.isfile(src):
+        # 单文件 exe（旁边没有 plugins\）：种子用打包时塞进包里的 config.json
+        bundled = os.path.join(getattr(sys, "_MEIPASS", ""),
+                               "config.json")
+        if os.path.isfile(bundled):
+            src = bundled
     try:
         if os.path.isfile(src):
             shutil.copy2(src, CONFIG_FILE)
@@ -446,7 +452,7 @@ loadConfig = async function(){
     waveform: Object.assign({}, (window.DEFAULTS && DEFAULTS.waveform) || {})
   };
   try{
-    const r = await fetch('/config/hsr_dglab');
+    const r = await fetch('/config/hsr_dglab' + '?t=' + Date.now(), {cache: 'no-store'});
     const disk = await r.json();
     Object.assign(merged.plugins, disk.plugins || {});
     Object.assign(merged.waveform, disk.waveform || {});
@@ -581,11 +587,15 @@ async def _ui_server(port):
     app = web.Application()
 
     async def ui_index(request):
+        # no-store：防止 WebView2 缓存旧页面/旧配置（波形页"改回去"问题）
         return web.Response(text=build_ui_html(), content_type="text/html",
-                            charset="utf-8")
+                            charset="utf-8",
+                            headers={"Cache-Control": "no-store"})
 
     async def ui_config(request):
-        return web.json_response(start.app.config)
+        # no-store：WebView2 会缓存 GET 响应，旧配置会让波形页"改不回去"
+        return web.json_response(start.app.config,
+                                 headers={"Cache-Control": "no-store"})
 
     async def api_status(request):
         # 引擎快照要拿引擎锁，而引擎操作握锁做 RPC 可能耗时数秒——
@@ -828,7 +838,8 @@ def main():
 
     # V4 控制器
     _bridge = __import__("v4_backend").V4Bridge(loop_th.loop, port=args.v4port,
-                                                log=lambda lv, m: LOG._p(lv, m))
+                                                log=lambda lv, m: LOG._p(lv, m),
+                                                config_fn=lambda: start.app.config)
     _bridge.start()
 
     # App shim（镜像 start.init，但 server 换成 V4Backend）

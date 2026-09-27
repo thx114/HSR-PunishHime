@@ -37,7 +37,12 @@ class BattleModule(ModuleBase):
 
     def on_event(self, event, payload):
         if event == E.EVT_DEFEATED and (payload or {}).get("team") == "Player":
-            self._knockdown((payload or {}).get("uid"))
+            uid = (payload or {}).get("uid")
+            # 忆灵/召唤物消失（如死龙自爆耗尽）不是角色倒地，不触发倒地重罚
+            if uid in getattr(self.engine, "mem_uids", ()) \
+                    or "忆灵" in str(self.engine.avatars.get(uid, "")):
+                return
+            self._knockdown(uid)
 
     # ---------- 角色掉血（移植自挨打就电 process_health_drop） ----------
     def _hp_drop(self, uid, lost):
@@ -48,11 +53,6 @@ class BattleModule(ModuleBase):
         blocked, block_msg = self.triggers.shield_blocks_health(e.shield.get(uid, 0))
         if blocked:
             e._log("debug", f"{name} {block_msg}，血量损失 {lost:.0f} 不计惩罚")
-            return
-
-        # 战斗开关
-        if e._b("only_in_battle", True) and not e.battle_active:
-            e._log("debug", f"{name} 脱战掉血 {lost:.0f}（仅战斗中惩罚已开启）")
             return
 
         # 忽略名单（子串匹配）
@@ -168,9 +168,6 @@ class BattleModule(ModuleBase):
             return  # 默认仅显示不惩罚（护盾到期自然消失无法与被打区分）
         name = e.avatars.get(uid, f"角色{uid}")
 
-        if e._b("only_in_battle", True) and not e.battle_active:
-            return
-
         ignore = str(self.cfg("ignore_names", "") or "")
         if ignore:
             keywords = [s.strip() for s in ignore.replace("，", ",").split(",") if s.strip()]
@@ -192,8 +189,6 @@ class BattleModule(ModuleBase):
     # ---------- 倒地重罚 ----------
     def _knockdown(self, uid):
         e = self.engine
-        if e._b("only_in_battle", True) and not e.battle_active:
-            return
         if not e._b("knockdown_enabled", True):
             return
         e.knock_count += 1

@@ -216,7 +216,8 @@ footer{display:flex;gap:10px;align-items:center;padding:10px 16px;background:var
           </div></div>
         <div class="fi"><label>血量掉落阈值</label><input type="number" data-key="health_drop_threshold"></div>
         <div class="fi"><label>单次最小掉血</label><input type="number" data-key="hit_min_percent"></div>
-        <div class="fi"><label>仅战斗中惩罚</label><input type="checkbox" class="chk" data-key="only_in_battle"></div>
+        <div class="fi"><label>触发间隔（秒）</label><input type="number" data-key="trigger_interval" step="0.05"></div>
+        <div class="fi"><label>掉血聚合窗口（秒）</label><input type="number" data-key="hit_aggregate_window" step="0.05"></div>
         <div class="fi"><label>忽略角色</label><input type="text" data-key="ignore_names"></div>
       </div>
     </div>
@@ -367,7 +368,7 @@ footer{display:flex;gap:10px;align-items:center;padding:10px 16px;background:var
           <input type="number" data-key="cw_red_cooldown" step="0.1"></div>
         <div class="fi"><label>总血量OCR间隔（秒）</label>
           <input type="number" data-key="cw_hp_ocr_interval" step="0.1"></div>
-        <div class="fi"><label></label><div style="flex:1;color:var(--dim);font-size:12px;line-height:1.5;">加号检测按「加号检测间隔」固定节拍跑，通过后才做红字检测与血量 OCR（其他窗口会被加号闸拦住）。掉血检测在红区内找「红字目标色」（近似度内数像素，数够「红字最少像素」才算一次），完全不经过 OCR；「红字冷却」要 ≥ 红字停留时长（建议 1~1.5 秒），否则一次闪红会连发多轮。总血量另走低频 OCR，只更新数值、绝不参与掉血判定。</div></div>
+        <div class="fi"><label></label><div style="flex:1;color:var(--dim);font-size:12px;line-height:1.5;">加号检测按「加号检测间隔」固定节拍跑，通过后才做红字检测与血量 OCR（其他窗口会被加号闸拦住）。掉血检测在红区内找「红字目标色」（近似度内数像素，数够「红字最少像素」才算一次），完全不经过 OCR。总血量另走低频 OCR，只更新数值、绝不参与掉血判定。</div></div>
         <div class="fi"><label></label><div style="flex:1;color:var(--dim);font-size:12px;line-height:1.5;">框选坐标自动换算为「识别目标窗口」的相对坐标（窗口标题已移到「实时状态」页），窗口移动自动跟随。</div></div>
         <div class="fi"><label></label>
           <div style="display:flex;gap:8px;flex:1;">
@@ -484,6 +485,9 @@ footer{display:flex;gap:10px;align-items:center;padding:10px 16px;background:var
         <div class="fi"><label>shield_pulse</label><textarea data-wave-key="shield_pulse"></textarea></div>
         <div class="fi"><label>knockdown_pulse</label><textarea data-wave-key="knockdown_pulse"></textarea></div>
         <div class="fi"><label>cw_total_pulse</label><textarea data-wave-key="cw_total_pulse"></textarea></div>
+        <div class="fi"><label>波形 d（毫秒/帧）</label><input type="number" data-key="wave_d_ms" step="50"></div>
+        <div class="fi"><label>波形通道</label><select data-key="wave_channel"><option value="All">A + B</option><option value="A">仅 A</option><option value="B">仅 B</option></select></div>
+        <div class="fi"><label></label><div style="flex:1;color:var(--dim);font-size:12px;line-height:1.5;">d 默认 100=正好播一遍（APP 会把波形循环补满 d，调大就重复多遍；被截断就调大）。只用 A 通道就选「仅 A」（B 的指令也会画在 APP 波形图上）。保存配置即时生效。</div></div>
         <div class="fi"><label></label><div style="flex:1;color:var(--dim);font-size:12px;line-height:1.5;"><b>每串 16 位十六进制 = 4 拍（每拍 100ms）</b>：前 4 字节=频率 Hz（0x64=100Hz，<b>越大越密越麻</b>，10Hz 会变成"敲"），后 4 字节=强度%（0x1E=30%、0x64=100%）。串数=时长，每串 400ms。</div></div>
       </div>
     </div>
@@ -600,7 +604,7 @@ async function loadConfig(){
   if(disk && disk.config) disk = disk.config;
   if(!disk){
     try{
-      const r = await fetch(BASE + '/config/' + encodeURIComponent(plugin));
+      const r = await fetch(BASE + '/config/' + encodeURIComponent(plugin) + '?t=' + Date.now(), {cache: 'no-store'});
       disk = await r.json();
     }catch(e){ disk = null; }
   }

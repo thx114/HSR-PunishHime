@@ -187,7 +187,7 @@ def test_conn():
 
 
 def test_shock(params=None):
-    """发送一次测试电击：设强度 A/B -> 发波形（重复 3 遍）-> 播完清波恢复原强度
+    """发送一次测试电击：设强度 A/B -> 发单轮波形 -> 播完清波恢复原强度
 
     参考 mc_dglab：dock 后端波形会循环播放，必须 clear_waveform 才停。
     每一步都写惩罚姬日志，测试是否生效看日志即可。
@@ -247,11 +247,18 @@ def test_shock(params=None):
         pulse = convert_pulse_data(_raw)
         app.log.info(f"测试电击：波形 {_wave_key}（{len(pulse)} 段）")
         if isinstance(pulse, list) and pulse:
-            wave = pulse * 3
-            duration = len(wave) * 0.1
+            wave = pulse              # 单轮：一次按下只播一遍（多遍会叠加成"多轮"体感）
         else:
             wave = pulse
-            duration = 1.0
+        # 实际播放时长 = 帧数(4串/帧) × wave_d_ms，与 v4_backend 的 d 逻辑一致；
+        # 旧算法按 100ms/串 估 1.0s，d=125 时波形 0.375s 就播完了，
+        # 收尾定时器却还挂在 1.0s 上——连点时正好砸中下一发
+        _frames = max(1, -(-len(wave) // 4)) if isinstance(wave, list) and wave else 10
+        try:
+            _dms = int(float(pc.get("wave_d_ms", 100)))
+        except Exception:
+            _dms = 100
+        duration = _frames * _dms / 1000.0 + 0.1
         # 蓝牙直连优先：设备通过电脑蓝牙连接时必须走 /coyote 接口
         bt = False
         try:
@@ -260,6 +267,8 @@ def test_shock(params=None):
         except Exception:
             bt = False
         if bt:
+            # 序号守卫：与引擎共用一套输出序号，连点/战斗触发互不残杀
+            _gen = p.output_seq_bump()
             p.set_strength("A", sa)
             p.set_strength("B", sb)
             app.log.info(f"测试电击：强度 A -> {sa} / B -> {sb}（蓝牙绝对设置）")
@@ -270,6 +279,8 @@ def test_shock(params=None):
                             f"——此刻设备应有体感；结束后强度自动归零")
             def _bt_stop():
                 try:
+                    if getattr(p, "_output_seq", 0) != _gen:
+                        return  # 已有更新的输出，本收尾作废
                     try:
                         app.server.clear_waveform()
                     except Exception:
@@ -302,9 +313,13 @@ def test_shock(params=None):
                         f"——请先在手机 APP 手动把强度调到 A{sa}/B{sb}！"
                         f"（APP 不接受远程非零强度，插件只负责波形与急停）")
 
+        _gen = p.output_seq_bump()
+
         def _app_stop():
             """测试收尾：只清波形队列，保持用户手动强度"""
             try:
+                if getattr(p, "_output_seq", 0) != _gen:
+                    return  # 已有更新的输出，本收尾作废
                 app.server.clear_waveform()
                 app.log.info("测试电击：波形队列已清（强度保持你手动设置的值）")
             except Exception as e:
@@ -452,13 +467,19 @@ def plus_test(params=None):
 
 
 def _shots_dir():
-    """截图目录：放到根目录（exe 旁边）的 screenshots/，不再写插件目录"""
+    """截图目录：放到根目录（exe 旁边）的 screenshots/，不再写插件目录；
+    冻结成单文件 exe 时 __file__ 在临时解包目录，改放 exe 旁边"""
     try:
         return screen_capture.shots_dir()
     except Exception:
-        d = os.path.join(os.path.dirname(os.path.dirname(PLUGIN_DIR)), "screenshots")
-        os.makedirs(d, exist_ok=True)
-        return d
+        pass
+    import sys as _sys
+    base = (os.path.dirname(os.path.abspath(_sys.executable))
+            if getattr(_sys, "frozen", False)
+            else os.path.dirname(os.path.dirname(PLUGIN_DIR)))
+    d = os.path.join(base, "screenshots")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def game_shot():

@@ -121,10 +121,11 @@ class V4Bridge:
         except Exception:
             pass
 
-    def __init__(self, loop, port=9898, log=print):
+    def __init__(self, loop, port=9898, log=print, config_fn=None):
         self.loop = loop
         self.port = port
         self.out = log
+        self._config_fn = config_fn
         self._ctl = v4ctrl.V4Controller(host="0.0.0.0", port=port,
                                         tid=self._load_pair_tid(), log=self._frame_log)
         self._ctl.pair_url = "ws://%s:%d?tid=%s" % (v4ctrl.lan_ip(), port, self._ctl.tid)
@@ -221,6 +222,23 @@ class V4Bridge:
         for c in _ch_idx(channel):
             self._call(self._ctl.reset_intensity(c), 5)
 
+    def _wave_opts(self):
+        """从客户端配置读波形参数：d 基准（毫秒/帧）与通道。
+
+        APP 会把波形循环补满 d——d 给多大就重复多少遍，默认 100ms/帧
+        正好播一遍。通道支持只发 A 或 B（单通道用户省一半指令）。"""
+        d_ms, ch = 100, "All"
+        try:
+            cfg = (self._config_fn() if self._config_fn else {}) or {}
+            plug = cfg.get("plugins", {}) or {}
+            d_ms = max(1, int(float(plug.get("wave_d_ms", 100))))
+            c = str(plug.get("wave_channel", "All")).strip().upper()
+            if c in ("A", "B"):
+                ch = c
+        except Exception:
+            pass
+        return d_ms, ch
+
     def send_wave(self, wave, channel="All", duration=None):
         """流式下发波形（非阻塞）。
 
@@ -230,10 +248,13 @@ class V4Bridge:
         v, ms = normalize_wave(wave)
         if not v:
             raise RuntimeError("波形为空")
+        _, ch = self._wave_opts()
+        if channel == "All" and ch in ("A", "B"):
+            channel = ch
         for c in _ch_idx(channel):
-            self._start_stream(c, v)
+            self._start_stream(c, v, duration)
 
-    def _start_stream(self, ch, v):
+    def _start_stream(self, ch, v, duration=None):
         async def runner():
             old = self._streams.get(ch)
             if old is not None:
@@ -241,7 +262,7 @@ class V4Bridge:
             task = asyncio.current_task()
             self._streams[ch] = task
             try:
-                await self._stream_coro(ch, v)
+                await self._stream_coro(ch, v, duration)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -251,15 +272,19 @@ class V4Bridge:
                     self._streams.pop(ch, None)
         asyncio.run_coroutine_threadsafe(runner(), self.loop)
 
-    async def _stream_coro(self, ch, v):
-        """每块 4 串（约 1.6s），每 1.2s 补一块。
-        d=块真实时长：帧播完任务即结束、输出停止（d=0 会让 APP 持续输出不停，实测电了一分钟）。
+    async def _stream_coro(self, ch, v, duration=None):
+        """每块 4 串，每 1.2s 补一块。
+        d = wave_d_ms（默认 100ms/帧）× 块帧数：APP 把波形循环补满 d，
+        d 给多大就重复多少遍（d=0 会持续输出不停，实测电了一分钟）。
+        duration（秒）显式给出时以其为准（持续电补满重发间隔）。
         首块 im=true 替换旧任务，后续块排队，队列深度稳定不排空。"""
         chunk, interval, first, i = 4, 1.2, True, 0
+        d_per, _ = self._wave_opts()
         while i < len(v):
             part = v[i:i + chunk]
             i += chunk
-            self._fire(ch, part, 400 * len(part), first)
+            d_ms = int(duration * 1000) if duration else d_per * len(part)
+            self._fire(ch, part, d_ms, first)
             first = False
             if i < len(v):
                 await asyncio.sleep(interval)
