@@ -157,7 +157,9 @@ class CurrencyWarsModule(ModuleBase):
                 self._red_tolerance = max(1, int(e._f("cw_red_tolerance", 10)))
                 # 掉血检测（红字直接触发，不经过 OCR）；总血量 OCR 低频
                 self._red_hit_amount = e._f("cw_red_hit_amount", 1)
-                self._red_cooldown = e._f("cw_red_cooldown", 0.6)
+                # 红字冷却需 >= 红字停留时长（约0.5~1s），否则一次闪红
+                # 会按检测节拍连发多轮电击（实测 0.1s 冷却 -> 0.5s 内 5 连发）
+                self._red_cooldown = e._f("cw_red_cooldown", 1.2)
                 self._hp_ocr_interval = max(0.05, e._f("cw_hp_ocr_interval", 0.4))
                 self._plus_interval = max(0.05, e._f("cw_plus_interval", 1.0))
                 self._red_interval = max(0.005, e._f("cw_red_interval", 0.03))

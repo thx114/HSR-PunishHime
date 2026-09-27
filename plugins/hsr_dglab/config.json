@@ -109,7 +109,7 @@
       "cw_plus_interval": 0.2,
       "cw_red_interval": 0.03,
       "cw_red_hit_amount": 20,
-      "cw_red_cooldown": 0.1,
+      "cw_red_cooldown": 1.2,
       "cw_hp_ocr_interval": 0.4,
       "cw_red_x": 0,
       "cw_red_y": 0,

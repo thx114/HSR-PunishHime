@@ -1,4 +1,4 @@
-# HSR PunishHime（惩罚姬）插件 - 崩铁·挨打就电（veritas + OCR 双路线）
+﻿# HSR PunishHime（惩罚姬）插件 - 崩铁·挨打就电（veritas + OCR 双路线）
 
 崩坏：星穹铁道精确惩罚插件。**双数据源、多模块架构**：
 

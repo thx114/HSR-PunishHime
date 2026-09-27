@@ -664,7 +664,8 @@ class HsrDGLab:
                 if self._check_dock_error("蓝牙波形", resp):
                     return
                 if not self.sustain_active():
-                    dur = max(0.5, len(pulse_data) * 0.1)
+                    # +0.3s：ver3 帧补齐拍（<=3 拍）+ 清理裕度，避免切掉尾巴
+                    dur = max(0.5, len(pulse_data) * 0.1 + 0.3)
                     threading.Timer(dur, self._bt_auto_stop).start()
             else:
                 # App 中继：total_duration 必须匹配帧数（100ms/帧）；
